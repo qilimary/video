@@ -1634,15 +1634,17 @@ import android.graphics.RectF;
 import android.view.MotionEvent;
 import android.view.View;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Compact editor timeline. Deleted ranges collapse out of the bar like a gallery editor. */
+/** Compact clip-style timeline. Each kept piece is a block separated by a visible edit gap. */
 final class EditorTimelineView extends View {
     interface OnSeekListener {
         void onSeek(double seconds, boolean finished);
     }
 
+    private static final double EPS = 0.0005;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF bar = new RectF();
     private double durationSeconds = 1.0;
@@ -1651,6 +1653,7 @@ final class EditorTimelineView extends View {
     private double splitPoint2 = Double.NaN;
     private List<AnimationEdits.TimeRange> deletedRanges = Collections.emptyList();
     private List<AnimationEdits.TimeRange> reversedRanges = Collections.emptyList();
+    private List<Double> sourceBoundaries = Collections.emptyList();
     private OnSeekListener seekListener;
     private boolean dragging;
 
@@ -1662,12 +1665,12 @@ final class EditorTimelineView extends View {
 
     void setDurationSeconds(double value) {
         durationSeconds = Math.max(0.001, value);
-        positionSeconds = clamp(positionSeconds);
+        positionSeconds = nearestKeptSource(positionSeconds);
         invalidate();
     }
 
     void setPositionSeconds(double value) {
-        positionSeconds = clamp(value);
+        positionSeconds = nearestKeptSource(value);
         invalidate();
     }
 
@@ -1681,10 +1684,32 @@ final class EditorTimelineView extends View {
         invalidate();
     }
 
+    void setSourceBoundaries(List<Double> values) {
+        if (values == null || values.isEmpty()) {
+            sourceBoundaries = Collections.emptyList();
+            invalidate();
+            return;
+        }
+        List<Double> clean = new ArrayList<>();
+        for (Double value : values) {
+            if (value == null || Double.isNaN(value) || Double.isInfinite(value)) continue;
+            double point = Math.max(0.0, Math.min(durationSeconds, value));
+            if (point <= EPS || point >= durationSeconds - EPS) continue;
+            clean.add(point);
+        }
+        Collections.sort(clean);
+        List<Double> unique = new ArrayList<>();
+        for (double point : clean) {
+            if (unique.isEmpty() || Math.abs(point - unique.get(unique.size() - 1)) >= 0.01) {
+                unique.add(point);
+            }
+        }
+        sourceBoundaries = Collections.unmodifiableList(unique);
+        invalidate();
+    }
+
     void setRanges(List<AnimationEdits.TimeRange> deleted,
                    List<AnimationEdits.TimeRange> reversed) {
-        // Normalize ranges once here. The deleted pieces are not painted: they are removed
-        // from the visible time axis, while callers can continue using absolute source time.
         AnimationEdits normalized = new AnimationEdits(
                 0, 0, 1.0, AnimationEdits.CROP_NONE, 0, false, false,
                 0, 100, 100,
@@ -1694,6 +1719,28 @@ final class EditorTimelineView extends View {
         reversedRanges = normalized.reversedRanges;
         positionSeconds = nearestKeptSource(positionSeconds);
         invalidate();
+    }
+
+    /** All persistent clip edges: source-file borders plus both sides of every removed range. */
+    List<Double> getEditingBoundaries() {
+        List<Double> points = new ArrayList<>();
+        points.add(0.0);
+        points.add(durationSeconds);
+        points.addAll(sourceBoundaries);
+        for (AnimationEdits.TimeRange range : deletedRanges) {
+            double start = Math.max(0.0, Math.min(durationSeconds, range.startSeconds));
+            double end = Math.max(start, Math.min(durationSeconds, range.endSeconds));
+            points.add(start);
+            points.add(end);
+        }
+        Collections.sort(points);
+        List<Double> unique = new ArrayList<>();
+        for (double point : points) {
+            if (unique.isEmpty() || Math.abs(point - unique.get(unique.size() - 1)) >= 0.01) {
+                unique.add(point);
+            }
+        }
+        return unique;
     }
 
     double getVisibleDurationSeconds() {
@@ -1721,15 +1768,23 @@ final class EditorTimelineView extends View {
         float left = dp(8);
         float right = getWidth() - dp(8);
         float centerY = getHeight() * 0.60f;
-        float thickness = dp(8);
+        float thickness = dp(9);
         bar.set(left, centerY - thickness * 0.5f, right, centerY + thickness * 0.5f);
 
+        List<SegmentLayout> layouts = buildLayouts(left, right);
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(0x99D4D6DE);
-        canvas.drawRoundRect(bar, thickness, thickness, paint);
-
-        for (AnimationEdits.TimeRange range : reversedRanges) {
-            drawRange(canvas, range, 0xFF7C6CE7, thickness);
+        if (layouts.isEmpty()) {
+            paint.setColor(0x44D4D6DE);
+            canvas.drawRoundRect(bar, thickness, thickness, paint);
+        } else {
+            paint.setColor(0xB8D4D6DE);
+            for (SegmentLayout layout : layouts) {
+                RectF segment = new RectF(layout.left, bar.top, layout.right, bar.bottom);
+                canvas.drawRoundRect(segment, dp(3), dp(3), paint);
+            }
+            for (AnimationEdits.TimeRange range : reversedRanges) {
+                drawRange(canvas, layouts, range, 0xFF7C6CE7);
+            }
         }
 
         drawSplitMarker(canvas, splitPoint1, "1", 0xFFFFC857);
@@ -1748,13 +1803,19 @@ final class EditorTimelineView extends View {
         canvas.drawPath(triangle, paint);
     }
 
-    private void drawRange(Canvas canvas, AnimationEdits.TimeRange range, int color, float thickness) {
-        float left = xFor(range.startSeconds);
-        float right = xFor(range.endSeconds);
-        if (right <= left) return;
+    private void drawRange(Canvas canvas, List<SegmentLayout> layouts,
+                           AnimationEdits.TimeRange range, int color) {
         paint.setColor(color);
-        RectF segment = new RectF(left, bar.top, right, bar.bottom);
-        canvas.drawRoundRect(segment, thickness, thickness, paint);
+        for (SegmentLayout layout : layouts) {
+            double start = Math.max(layout.range.startSeconds, range.startSeconds);
+            double end = Math.min(layout.range.endSeconds, range.endSeconds);
+            if (end - start <= EPS) continue;
+            float x1 = xInside(layout, start);
+            float x2 = xInside(layout, end);
+            if (x2 <= x1) continue;
+            RectF segment = new RectF(x1, bar.top, x2, bar.bottom);
+            canvas.drawRoundRect(segment, dp(3), dp(3), paint);
+        }
     }
 
     private void drawSplitMarker(Canvas canvas, double seconds, String label, int color) {
@@ -1794,11 +1855,7 @@ final class EditorTimelineView extends View {
     }
 
     private void updateTouchPosition(float touchX, boolean finished) {
-        float left = dp(8);
-        float right = Math.max(left + 1f, getWidth() - dp(8));
-        float normalized = (touchX - left) / (right - left);
-        normalized = Math.max(0f, Math.min(1f, normalized));
-        positionSeconds = sourceForVisibleOffset(normalized * visibleDurationSeconds());
+        positionSeconds = sourceForX(touchX);
         invalidate();
         if (seekListener != null) seekListener.onSeek(positionSeconds, finished);
     }
@@ -1812,18 +1869,131 @@ final class EditorTimelineView extends View {
     private float xFor(double seconds) {
         float left = dp(8);
         float right = Math.max(left + 1f, getWidth() - dp(8));
-        double normalized = visibleOffsetForSource(seconds) / visibleDurationSeconds();
-        return left + (float) normalized * (right - left);
+        List<SegmentLayout> layouts = buildLayouts(left, right);
+        if (layouts.isEmpty()) return left;
+        double source = clamp(seconds);
+        for (int i = 0; i < layouts.size(); i++) {
+            SegmentLayout current = layouts.get(i);
+            if (source < current.range.startSeconds - EPS) {
+                if (i == 0) return current.left;
+                SegmentLayout previous = layouts.get(i - 1);
+                double gapStart = previous.range.endSeconds;
+                double gapEnd = current.range.startSeconds;
+                if (gapEnd - gapStart <= EPS) return (previous.right + current.left) * 0.5f;
+                double ratio = (source - gapStart) / Math.max(EPS, gapEnd - gapStart);
+                ratio = Math.max(0.0, Math.min(1.0, ratio));
+                return previous.right + (float) ratio * (current.left - previous.right);
+            }
+            if (source <= current.range.endSeconds + EPS) {
+                if (i + 1 < layouts.size()
+                        && Math.abs(source - current.range.endSeconds) <= EPS
+                        && Math.abs(layouts.get(i + 1).range.startSeconds - source) <= EPS) {
+                    return (current.right + layouts.get(i + 1).left) * 0.5f;
+                }
+                return xInside(current, source);
+            }
+        }
+        return layouts.get(layouts.size() - 1).right;
+    }
+
+    private double sourceForX(float touchX) {
+        float left = dp(8);
+        float right = Math.max(left + 1f, getWidth() - dp(8));
+        List<SegmentLayout> layouts = buildLayouts(left, right);
+        if (layouts.isEmpty()) return 0.0;
+        if (touchX <= layouts.get(0).left) return layouts.get(0).range.startSeconds;
+        for (int i = 0; i < layouts.size(); i++) {
+            SegmentLayout current = layouts.get(i);
+            if (touchX >= current.left && touchX <= current.right) {
+                float width = Math.max(1f, current.right - current.left);
+                double ratio = (touchX - current.left) / width;
+                return clamp(current.range.startSeconds
+                        + ratio * (current.range.endSeconds - current.range.startSeconds));
+            }
+            if (i + 1 < layouts.size()) {
+                SegmentLayout next = layouts.get(i + 1);
+                if (touchX > current.right && touchX < next.left) {
+                    if (Math.abs(current.range.endSeconds - next.range.startSeconds) <= EPS) {
+                        return clamp(current.range.endSeconds);
+                    }
+                    float midpoint = (current.right + next.left) * 0.5f;
+                    if (touchX < midpoint) {
+                        return clamp(Math.max(current.range.startSeconds,
+                                current.range.endSeconds - 0.001));
+                    }
+                    return clamp(next.range.startSeconds);
+                }
+            }
+        }
+        return layouts.get(layouts.size() - 1).range.endSeconds;
+    }
+
+    private List<SegmentLayout> buildLayouts(float left, float right) {
+        List<AnimationEdits.TimeRange> segments = buildVisibleSegments();
+        if (segments.isEmpty()) return Collections.emptyList();
+        float width = Math.max(1f, right - left);
+        float gap = gapWidthPx(segments.size(), width);
+        float contentWidth = Math.max(1f, width - gap * Math.max(0, segments.size() - 1));
+        double totalSeconds = 0.0;
+        for (AnimationEdits.TimeRange segment : segments) totalSeconds += segment.durationSeconds();
+        totalSeconds = Math.max(EPS, totalSeconds);
+
+        List<SegmentLayout> result = new ArrayList<>();
+        float x = left;
+        for (int i = 0; i < segments.size(); i++) {
+            AnimationEdits.TimeRange segment = segments.get(i);
+            float segmentWidth = contentWidth * (float) (segment.durationSeconds() / totalSeconds);
+            float end = i == segments.size() - 1 ? right : Math.min(right, x + segmentWidth);
+            result.add(new SegmentLayout(segment, x, Math.max(x + 1f, end)));
+            x = end + gap;
+        }
+        return result;
+    }
+
+    private float gapWidthPx(int segmentCount, float width) {
+        if (segmentCount <= 1) return 0f;
+        float maxPerGap = width * 0.28f / (segmentCount - 1);
+        return Math.max(1f, Math.min(dp(6), maxPerGap));
+    }
+
+    private List<AnimationEdits.TimeRange> buildVisibleSegments() {
+        List<AnimationEdits.TimeRange> result = new ArrayList<>();
+        double cursor = 0.0;
+        for (AnimationEdits.TimeRange deleted : deletedRanges) {
+            double start = Math.max(cursor, Math.min(durationSeconds, deleted.startSeconds));
+            double end = Math.max(start, Math.min(durationSeconds, deleted.endSeconds));
+            appendSplitRange(result, cursor, start);
+            cursor = Math.max(cursor, end);
+            if (cursor >= durationSeconds - EPS) break;
+        }
+        appendSplitRange(result, cursor, durationSeconds);
+        return result;
+    }
+
+    private void appendSplitRange(List<AnimationEdits.TimeRange> output,
+                                  double start, double end) {
+        if (end - start <= EPS) return;
+        double cursor = start;
+        for (double boundary : sourceBoundaries) {
+            if (boundary <= cursor + EPS) continue;
+            if (boundary >= end - EPS) break;
+            output.add(new AnimationEdits.TimeRange(cursor, boundary));
+            cursor = boundary;
+        }
+        if (end - cursor > EPS) output.add(new AnimationEdits.TimeRange(cursor, end));
+    }
+
+    private float xInside(SegmentLayout layout, double seconds) {
+        double span = Math.max(EPS, layout.range.durationSeconds());
+        double ratio = (seconds - layout.range.startSeconds) / span;
+        ratio = Math.max(0.0, Math.min(1.0, ratio));
+        return layout.left + (float) ratio * (layout.right - layout.left);
     }
 
     private double visibleDurationSeconds() {
-        double removed = 0.0;
-        for (AnimationEdits.TimeRange range : deletedRanges) {
-            double start = Math.max(0.0, Math.min(durationSeconds, range.startSeconds));
-            double end = Math.max(start, Math.min(durationSeconds, range.endSeconds));
-            removed += Math.max(0.0, end - start);
-        }
-        return Math.max(0.001, durationSeconds - removed);
+        double total = 0.0;
+        for (AnimationEdits.TimeRange range : buildVisibleSegments()) total += range.durationSeconds();
+        return Math.max(0.001, total);
     }
 
     private double visibleOffsetForSource(double sourceSeconds) {
@@ -1839,20 +2009,6 @@ final class EditorTimelineView extends View {
             } else break;
         }
         return Math.max(0.0, Math.min(visibleDurationSeconds(), source - removed));
-    }
-
-    private double sourceForVisibleOffset(double visibleSeconds) {
-        double remaining = Math.max(0.0, Math.min(visibleDurationSeconds(), visibleSeconds));
-        double cursor = 0.0;
-        for (AnimationEdits.TimeRange range : deletedRanges) {
-            double start = Math.max(cursor, Math.min(durationSeconds, range.startSeconds));
-            double end = Math.max(start, Math.min(durationSeconds, range.endSeconds));
-            double kept = Math.max(0.0, start - cursor);
-            if (remaining <= kept) return clamp(cursor + remaining);
-            remaining -= kept;
-            cursor = end;
-        }
-        return clamp(cursor + remaining);
     }
 
     private double nearestKeptSource(double sourceSeconds) {
@@ -1872,6 +2028,18 @@ final class EditorTimelineView extends View {
 
     private float dp(float value) {
         return value * getResources().getDisplayMetrics().density;
+    }
+
+    private static final class SegmentLayout {
+        final AnimationEdits.TimeRange range;
+        final float left;
+        final float right;
+
+        SegmentLayout(AnimationEdits.TimeRange range, float left, float right) {
+            this.range = range;
+            this.left = left;
+            this.right = right;
+        }
     }
 }
 ''',
@@ -4896,7 +5064,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView cutHelp = text(
-                "拖动时间轴定位；分割后可删除或倒放，撤销可恢复。",
+                "时间轴空隙就是片段边界；多视频和删除后的断点都会保留。",
                 12, SECONDARY_TEXT, false);
         cutHelp.setPadding(0, 0, 0, dp(7));
         content.addView(cutHelp);
@@ -5046,8 +5214,20 @@ public class MainActivity extends Activity {
         };
         refreshEditorAudio.run();
 
+        final List<Double> sourceClipBoundaries = new ArrayList<>();
+        if (previewVideoDurations.length > 1) {
+            double sourceCursor = 0.0;
+            for (int i = 0; i < previewVideoDurations.length - 1; i++) {
+                sourceCursor += Math.max(0.0, previewVideoDurations[i]);
+                if (sourceCursor > 0.01 && sourceCursor < timelineSeconds - 0.01) {
+                    sourceClipBoundaries.add(sourceCursor);
+                }
+            }
+        }
+
         final EditorTimelineView timeline = new EditorTimelineView(this);
         timeline.setDurationSeconds(timelineSeconds);
+        timeline.setSourceBoundaries(sourceClipBoundaries);
         timeline.setPositionSeconds(0.0);
         timeline.setSplitPoints(splitPoints[0], splitPoints[1]);
         timeline.setRanges(deletedRanges, reversedRanges);
@@ -5303,10 +5483,13 @@ public class MainActivity extends Activity {
             boolean hasTwoPoints = hasFirstPoint && !Double.isNaN(splitPoints[1]);
             boolean validReverseRange = hasTwoPoints
                     && Math.abs(splitPoints[1] - splitPoints[0]) >= 0.01;
-            // Deleting follows the playhead: one split is enough to create two selectable segments.
-            deleteBetweenButton.setEnabled(hasFirstPoint);
+            // Imported clip borders and deleted gaps are persistent edit boundaries.
+            // After one new split, the neighboring natural boundary can be used immediately.
+            boolean hasNaturalSegments = timeline.getEditingBoundaries().size() > 2;
+            boolean canDeleteSegment = hasFirstPoint || hasNaturalSegments;
+            deleteBetweenButton.setEnabled(canDeleteSegment);
             reverseBetweenButton.setEnabled(validReverseRange);
-            applyEditorButtonStyle(deleteBetweenButton, hasFirstPoint, false);
+            applyEditorButtonStyle(deleteBetweenButton, canDeleteSegment, false);
             applyEditorButtonStyle(reverseBetweenButton, validReverseRange, false);
             boolean canUndo = !undoHistory.isEmpty();
             boolean canRedo = !redoHistory.isEmpty();
@@ -5317,13 +5500,17 @@ public class MainActivity extends Activity {
 
             if (hasFirstPoint && !hasTwoPoints) {
                 editState.setText(String.format(Locale.CHINA,
-                        "切点 %.2f 秒；把光标移到要删的一侧后点“删除片段”，或再加一个切点。",
+                        hasNaturalSegments
+                                ? "切点 %.2f 秒；会优先和最近的空隙边界组成一段，直接删除即可。"
+                                : "切点 %.2f 秒；把光标移到要删的一侧后点“删除片段”，或再加一个切点。",
                         splitPoints[0]));
             } else if (hasTwoPoints) {
                 editState.setText(String.format(Locale.CHINA,
                         "切点 %.2f / %.2f 秒；删除按当前光标所在分段，倒放仍作用于两切点之间。",
                         Math.min(splitPoints[0], splitPoints[1]),
                         Math.max(splitPoints[0], splitPoints[1])));
+            } else if (hasNaturalSegments) {
+                editState.setText("空隙是片段边界；再分割一次会自动取最近边界，便于继续微调。");
             } else {
                 editState.setText("已删除 " + deletedRanges.size() + " 段 · 已倒放 "
                         + reversedRanges.size() + " 段");
@@ -5364,11 +5551,8 @@ public class MainActivity extends Activity {
         });
 
         deleteBetweenButton.setOnClickListener(v -> {
-            if (Double.isNaN(splitPoints[0])) return;
-
-            // Normal editor behavior: split points create segments; the playhead chooses which
-            // segment is deleted. With one cut, this deletes the left or right side. With two
-            // cuts, it can delete before, between, or after the cuts without reselecting a range.
+            // Natural clip borders and previous deletion gaps act like permanent split points.
+            // A single new split is therefore enough to shave a few more seconds from either side.
             double point = timeline.getPositionSeconds();
             if (videoPreview[0] != null && previewVideoIndex[0] >= 0) {
                 point = previewVideoOffsetSeconds[0]
@@ -5378,13 +5562,13 @@ public class MainActivity extends Activity {
             }
             point = Math.max(0.0, Math.min(timelineSeconds, point));
 
-            List<Double> boundaries = new ArrayList<>();
-            boundaries.add(0.0);
-            boundaries.add(Math.max(0.0, Math.min(timelineSeconds, splitPoints[0])));
+            List<Double> boundaries = new ArrayList<>(timeline.getEditingBoundaries());
+            if (!Double.isNaN(splitPoints[0])) {
+                boundaries.add(Math.max(0.0, Math.min(timelineSeconds, splitPoints[0])));
+            }
             if (!Double.isNaN(splitPoints[1])) {
                 boundaries.add(Math.max(0.0, Math.min(timelineSeconds, splitPoints[1])));
             }
-            boundaries.add(timelineSeconds);
             Collections.sort(boundaries);
 
             // Remove accidental duplicate cut positions so a zero-length segment is never chosen.
@@ -5398,15 +5582,54 @@ public class MainActivity extends Activity {
 
             double startPoint = unique.get(0);
             double endPoint = unique.get(1);
-            for (int i = 0; i + 1 < unique.size(); i++) {
-                double candidateStart = unique.get(i);
-                double candidateEnd = unique.get(i + 1);
-                boolean last = i + 2 == unique.size();
-                if ((point >= candidateStart && point < candidateEnd)
-                        || (last && point <= candidateEnd)) {
-                    startPoint = candidateStart;
-                    endPoint = candidateEnd;
-                    break;
+            boolean picked = false;
+
+            // With one new split inside an already segmented timeline, pressing Delete right away
+            // trims from that split to the nearest persistent clip edge. This matches the common
+            // gallery/editor gesture: an old cut supplies one edge, so the user only marks once.
+            if (!Double.isNaN(splitPoints[0]) && Double.isNaN(splitPoints[1])
+                    && Math.abs(point - splitPoints[0]) < 0.03) {
+                List<Double> persistent = timeline.getEditingBoundaries();
+                if (persistent.size() > 2) {
+                    double split = splitPoints[0];
+                    double leftBoundary = Double.NaN;
+                    double rightBoundary = Double.NaN;
+                    for (double boundary : persistent) {
+                        if (boundary < split - 0.01) leftBoundary = boundary;
+                        else if (boundary > split + 0.01) {
+                            rightBoundary = boundary;
+                            break;
+                        }
+                    }
+                    double leftDistance = Double.isNaN(leftBoundary)
+                            ? Double.POSITIVE_INFINITY : split - leftBoundary;
+                    double rightDistance = Double.isNaN(rightBoundary)
+                            ? Double.POSITIVE_INFINITY : rightBoundary - split;
+                    if (leftDistance < Double.POSITIVE_INFINITY
+                            || rightDistance < Double.POSITIVE_INFINITY) {
+                        if (leftDistance <= rightDistance) {
+                            startPoint = leftBoundary;
+                            endPoint = split;
+                        } else {
+                            startPoint = split;
+                            endPoint = rightBoundary;
+                        }
+                        picked = endPoint - startPoint >= 0.01;
+                    }
+                }
+            }
+
+            if (!picked) {
+                for (int i = 0; i + 1 < unique.size(); i++) {
+                    double candidateStart = unique.get(i);
+                    double candidateEnd = unique.get(i + 1);
+                    boolean last = i + 2 == unique.size();
+                    if ((point >= candidateStart && point < candidateEnd)
+                            || (last && point <= candidateEnd)) {
+                        startPoint = candidateStart;
+                        endPoint = candidateEnd;
+                        break;
+                    }
                 }
             }
             if (endPoint - startPoint < 0.01) return;
