@@ -1,11 +1,11 @@
-name: Build Format Converter v8.0
+name: Build Format Converter v8.1
 
 on:
   push:
     branches: [main, 'codex/**']
-    paths: ['.github/workflows/build.yml', 'android_project.py', '转换.png']
+    paths: ['.github/workflows/build_fixed_device_tests.yml', 'android_project.py', '转换.png']
   pull_request:
-    paths: ['.github/workflows/build.yml', 'android_project.py', '转换.png']
+    paths: ['.github/workflows/build_fixed_device_tests.yml', 'android_project.py', '转换.png']
   workflow_dispatch:
 
 permissions:
@@ -58,59 +58,23 @@ jobs:
           python -m pip install --disable-pip-version-check Pillow==11.3.0
           python android_project.py --icon 转换.png
 
-      - name: Apply Android runtime compatibility fixes
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          audio = Path("app/src/main/java/com/qi/formatconverter/AudioPipeline.java")
-          s = audio.read_text(encoding="utf-8")
-          old = "sonic.flush();"
-          count = s.count(old)
-          if count != 2:
-              raise SystemExit(f"Unexpected Sonic flush call count: {count}")
-          s = s.replace(old, "sonic.flush(AudioProcessor.StreamMetadata.DEFAULT);")
-          audio.write_text(s, encoding="utf-8")
-
-          doc = Path("app/src/main/java/com/qi/formatconverter/DocumentKit.java")
-          s = doc.read_text(encoding="utf-8")
-          marker = (
-              'if (text.toString().trim().isEmpty()) throw new IOException('
-              '"此 PDF 没有可提取文字，可能是扫描件；请先 OCR 识别。此功能不包含 OCR。");\n'
-              '                return text.toString();'
-          )
-          replacement = (
-              'if (text.toString().trim().isEmpty()) throw new IOException('
-              '"此 PDF 没有可提取文字，可能是扫描件；请先 OCR 识别。此功能不包含 OCR。");\n'
-              '                return java.text.Normalizer.normalize('
-              'text.toString(), java.text.Normalizer.Form.NFKC);'
-          )
-          if marker not in s:
-              raise SystemExit("PDF extraction return point not found")
-          s = s.replace(marker, replacement, 1)
-          doc.write_text(s, encoding="utf-8")
-
-          print("Applied Media3 Sonic flush compatibility fix and PDF Unicode normalization.")
-          PY
-
       - name: Test and build optimized APK
         run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest
 
       - name: Verify and package APK
         run: |
           set -euo pipefail
-          cp app/build/outputs/apk/release/app-release.apk FormatConverter-v8.0.apk
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose FormatConverter-v8.0.apk
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 FormatConverter-v8.0.apk
-          sha256sum FormatConverter-v8.0.apk > FormatConverter-v8.0.sha256
+          cp app/build/outputs/apk/release/app-release.apk FormatConverter-v8.1.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose FormatConverter-v8.1.apk
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 FormatConverter-v8.1.apk
+          sha256sum FormatConverter-v8.1.apk > FormatConverter-v8.1.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: FormatConverter-v8.0
+          name: FormatConverter-v8.1
           path: |
-            FormatConverter-v8.0.apk
-            FormatConverter-v8.0.sha256
+            FormatConverter-v8.1.apk
+            FormatConverter-v8.1.sha256
           compression-level: 0
           if-no-files-found: error
 
