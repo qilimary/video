@@ -1,12 +1,11 @@
-
 name: Build Format Converter v8.2
 
 on:
   push:
     branches: [main, 'codex/**']
-    paths: ['.github/workflows/build_fixed_device_tests.yml', 'android_project.py', 'android_project_update_v82.py', '转换.png']
+    paths: ['.github/workflows/build.yml', 'android_project.py', '转换.png']
   pull_request:
-    paths: ['.github/workflows/build_fixed_device_tests.yml', 'android_project.py', 'android_project_update_v82.py', '转换.png']
+    paths: ['.github/workflows/build.yml', 'android_project.py', '转换.png']
   workflow_dispatch:
 
 permissions:
@@ -53,9 +52,6 @@ jobs:
         with:
           path: ~/.android/debug.keystore
           key: format-converter-development-signing-v1
-
-      - name: Apply UI and editor update
-        run: python android_project_update_v82.py android_project.py
 
       - name: Generate project and icons
         run: |
