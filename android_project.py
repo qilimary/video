@@ -4231,12 +4231,9 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView title = text("格式转换器", 28, PRIMARY_TEXT, true);
+        title.setPadding(0, 0, 0, dp(16));
         root.addView(title);
-        TextView subtitle = text(
-                "图片、GIF、PDF、视频与音频格式转换，全部在本机离线完成。",
-                14, SECONDARY_TEXT, false);
-        subtitle.setPadding(0, dp(6), 0, dp(16));
-        root.addView(subtitle);
+        // Keep the landing page compact: the title is enough.
 
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -4296,19 +4293,15 @@ public class MainActivity extends Activity {
         itemTouchHelper = new ItemTouchHelper(dragCallback);
         itemTouchHelper.attachToRecyclerView(selectedRecycler);
 
-        TextView selectionHint = text(
-                "长按文件卡片可拖动排序。",
-                12, SECONDARY_TEXT, false);
-        selectionHint.setPadding(0, dp(8), 0, dp(17));
-        panel.addView(selectionHint);
+        // Reordering remains available by long-press; no persistent helper copy is needed.
 
         addLabel(panel, "输出格式", PRIMARY_TEXT);
         visibleOutputFormats.clear();
         for (int i = 0; i < OUTPUT_FORMATS.length; i++) visibleOutputFormats.add(i);
         formatSpinner = createSpinner(OUTPUT_FORMATS);
         panel.addView(formatSpinner, matchWrap());
-        recommendationText = text("添加文件后显示推荐数值", 13, SECONDARY_TEXT, false);
-        recommendationText.setPadding(0, dp(8), 0, dp(8));
+        recommendationText = text("", 13, SECONDARY_TEXT, false);
+        recommendationText.setVisibility(View.GONE);
         panel.addView(recommendationText, matchWrap());
 
         qualityText = text("图片质量：92", 15, PRIMARY_TEXT, false);
@@ -4385,11 +4378,8 @@ public class MainActivity extends Activity {
         customReverseLoopEdit = numberField("自定义第几次倒放（0=不倒放）", "0", false);
         panel.addView(customReverseLoopEdit, fieldParams());
 
-        TextView hint = text(
-                "视频 / GIF 可继续剪辑或直接导出。",
-                12, SECONDARY_TEXT, false);
-        hint.setPadding(0, dp(12), 0, dp(10));
-        panel.addView(hint);
+        TextView hint = text("", 1, SECONDARY_TEXT, false);
+        hint.setVisibility(View.GONE);
         animationOptionsHint = hint;
 
         editButton = createButton("视频 / GIF 剪辑", false);
@@ -4443,11 +4433,7 @@ public class MainActivity extends Activity {
         statusText.setPadding(0, dp(12), 0, 0);
         panel.addView(statusText);
 
-        TextView simpleHelp = text(
-                "导入文件后只显示可用输出格式；视频剪辑可处理原声、配乐和片段。",
-                12, SECONDARY_TEXT, false);
-        simpleHelp.setPadding(0, dp(12), 0, 0);
-        root.addView(simpleHelp, matchWrap());
+        // Detailed helper copy is intentionally omitted; controls explain themselves.
         codecSupportText = text("", 1, SECONDARY_TEXT, false);
         codecSupportText.setVisibility(View.GONE);
         root.addView(codecSupportText, matchWrap());
@@ -5063,11 +5049,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView cutHelp = text(
-                "时间轴空隙就是片段边界；多视频和删除后的断点都会保留。",
-                12, SECONDARY_TEXT, false);
-        cutHelp.setPadding(0, 0, 0, dp(7));
-        content.addView(cutHelp);
+        // Segment gaps and source clip borders are visual, so no helper sentence is needed.
 
         final double[] splitPoints = {Double.NaN, Double.NaN};
         final java.util.ArrayDeque<EditorTimelineState> undoHistory =
@@ -5189,14 +5171,12 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) { }
         }
 
-        TextView audioStatus = text("", 12, SECONDARY_TEXT, false);
-        content.addView(audioStatus, matchWrap());
+        TextView audioStatus = text("", 1, SECONDARY_TEXT, false);
+        audioStatus.setVisibility(View.GONE);
         if (videoPreview[0] != null) {
             videoPreview[0].setAudioStatusListener(audioStatus::setText);
             videoPreview[0].setPreviewVolume(originalVolume);
         } else audioStatus.setText("GIF 本身没有原声，可在声音设置中添加配乐。");
-        content.addView(text("预览同步播放原声和背景音乐；导出时应用完整剪辑与混音。",
-                11, SECONDARY_TEXT, false), matchWrap());
         Button editorAudio = createButton("声音设置 / 添加背景音乐", false);
         content.addView(editorAudio, matchWrap());
         editorAudio.setOnClickListener(v -> {
@@ -5461,7 +5441,7 @@ public class MainActivity extends Activity {
         historyRow.setPadding(0, dp(5), 0, 0);
         addCompactButtons(historyRow, undoButton, redoButton);
         content.addView(historyRow, matchWrap());
-        content.addView(editState);
+        editState.setVisibility(View.GONE);
 
         Runnable updateTimelineState = () -> {
             timeline.setSplitPoints(splitPoints[0], splitPoints[1]);
@@ -5709,10 +5689,59 @@ public class MainActivity extends Activity {
             content.addView(timeRow, matchWrap());
         }
 
-        addLabelWithTop(content, "速度", PRIMARY_TEXT);
-        final Spinner speedSpinner = createSpinner(EDIT_SPEED_OPTIONS);
-        speedSpinner.setSelection(nearestSpeedIndex(current.speed));
-        content.addView(speedSpinner, matchWrap());
+        final double[] selectedSpeed = {Math.max(0.25, Math.min(10.0, current.speed))};
+        final TextView speedValue = addLabelWithTop(content,
+                "速度 · " + formatSpeedMultiplier(selectedSpeed[0]), PRIMARY_TEXT);
+        final SeekBar speedSeek = new SeekBar(this);
+        speedSeek.setMin(25);
+        speedSeek.setMax(1000);
+        speedSeek.setProgress((int) Math.round(selectedSpeed[0] * 100.0));
+        content.addView(speedSeek, matchWrap());
+        final double[] speedAnchors = {0.5, 1.0, 1.5, 2.0, 4.0, 10.0};
+        final Runnable updateSpeedValue = () -> speedValue.setText(
+                "速度 · " + formatSpeedMultiplier(selectedSpeed[0]));
+        speedSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                selectedSpeed[0] = Math.max(0.25, Math.min(10.0, progress / 100.0));
+                updateSpeedValue.run();
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                double nearest = selectedSpeed[0];
+                double distance = Double.MAX_VALUE;
+                for (double anchor : speedAnchors) {
+                    double currentDistance = Math.abs(selectedSpeed[0] - anchor);
+                    if (currentDistance < distance) {
+                        nearest = anchor;
+                        distance = currentDistance;
+                    }
+                }
+                // Close values magnetically snap to common speeds, while the rest stay fully free.
+                if (distance <= 0.04) {
+                    selectedSpeed[0] = nearest;
+                    speedSeek.setProgress((int) Math.round(nearest * 100.0));
+                    speedSeek.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
+                }
+                updateSpeedValue.run();
+            }
+        });
+        LinearLayout speedAnchorRow = horizontalRow();
+        Button speed05 = createEditorButton("0.5×", false);
+        Button speed10 = createEditorButton("1×", false);
+        Button speed15 = createEditorButton("1.5×", false);
+        Button speed20 = createEditorButton("2×", false);
+        Button speed40 = createEditorButton("4×", false);
+        Button speed100 = createEditorButton("10×", false);
+        Button[] speedButtons = {speed05, speed10, speed15, speed20, speed40, speed100};
+        for (Button button : speedButtons) button.setTextSize(12);
+        speed05.setOnClickListener(v -> speedSeek.setProgress(50));
+        speed10.setOnClickListener(v -> speedSeek.setProgress(100));
+        speed15.setOnClickListener(v -> speedSeek.setProgress(150));
+        speed20.setOnClickListener(v -> speedSeek.setProgress(200));
+        speed40.setOnClickListener(v -> speedSeek.setProgress(400));
+        speed100.setOnClickListener(v -> speedSeek.setProgress(1000));
+        addCompactButtons(speedAnchorRow, speed05, speed10, speed15, speed20, speed40, speed100);
+        content.addView(speedAnchorRow, matchWrap());
 
         addLabelWithTop(content, "画面", PRIMARY_TEXT);
         final Spinner cropSpinner = createSpinner(EDIT_CROP_OPTIONS);
@@ -5738,11 +5767,6 @@ public class MainActivity extends Activity {
         content.addView(flipRow, matchWrap());
 
         addLabelWithTop(content, "基础调色", PRIMARY_TEXT);
-        TextView colorHint = text(
-                "调色会应用到最终输出。",
-                11, SECONDARY_TEXT, false);
-        colorHint.setPadding(0, 0, 0, dp(3));
-        content.addView(colorHint);
         final TextView brightnessText = text("", 12, SECONDARY_TEXT, false);
         final SeekBar brightnessSeek = new SeekBar(this);
         brightnessSeek.setMax(100);
@@ -5804,19 +5828,13 @@ public class MainActivity extends Activity {
         int existingFormat = selectedOutputFormat();
         editorOutput.setSelection(existingFormat >= 4 && existingFormat <= 6 ? existingFormat - 4 : 0);
         content.addView(editorOutput, matchWrap());
-        content.addView(text("使用主页当前视频参数；多视频按列表顺序合并。",
-                11, SECONDARY_TEXT, false), matchWrap());
-        if (editorItems.size() != selectedItems.size()) {
-            content.addView(text("本次只剪辑和导出视频（无视频时为首个 GIF）；其余文件保留在主页列表。",
-                    11, SECONDARY_TEXT, false), matchWrap());
-        }
         Button resetEditor = createButton("重置剪辑", false);
         content.addView(resetEditor, matchWrap());
         Runnable saveEdits = () -> {
             animationEdits = new AnimationEdits(
                     finalTimedSource ? parseDouble(startEdit.getText().toString(), 0) : 0,
                     finalTimedSource ? parseDouble(durationEdit.getText().toString(), 0) : 0,
-                    EDIT_SPEED_VALUES[speedSpinner.getSelectedItemPosition()],
+                    selectedSpeed[0],
                     cropSpinner.getSelectedItemPosition(), rotationSpinner.getSelectedItemPosition() * 90,
                     flipHorizontal.isChecked(), flipVertical.isChecked(),
                     brightnessSeek.getProgress() - 50, contrastSeek.getProgress() + 50,
@@ -5835,7 +5853,9 @@ public class MainActivity extends Activity {
                 .create();
         resetEditor.setOnClickListener(v -> {
             startEdit.setText("0"); durationEdit.setText("0");
-            speedSpinner.setSelection(nearestSpeedIndex(1.0));
+            selectedSpeed[0] = 1.0;
+            speedSeek.setProgress(100);
+            updateSpeedValue.run();
             cropSpinner.setSelection(0); rotationSpinner.setSelection(0);
             flipHorizontal.setChecked(false); flipVertical.setChecked(false);
             brightnessSeek.setProgress(DEFAULT_EDITOR_BRIGHTNESS + 50);
@@ -5930,6 +5950,13 @@ public class MainActivity extends Activity {
         } finally {
             try { retriever.release(); } catch (Throwable ignored) { }
         }
+    }
+
+    private static String formatSpeedMultiplier(double speed) {
+        String value = String.format(Locale.CHINA, "%.2f", speed);
+        while (value.endsWith("0")) value = value.substring(0, value.length() - 1);
+        if (value.endsWith(".")) value = value.substring(0, value.length() - 1);
+        return value + "×";
     }
 
     private static int nearestSpeedIndex(double speed) {
@@ -6192,7 +6219,6 @@ public class MainActivity extends Activity {
     private void showAudioSettings() {
         if (busy || activeEditorDialog == null || activeAudioDialog != null) return;
         LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(dp(20),dp(8),dp(20),dp(12));
-        TextView help=text("原声和背景音乐可分别调音量；预览会同步播放，导出时应用循环和淡入淡出。",13,SECONDARY_TEXT,false);content.addView(help);
         TextView originalLabel=text("原声音量："+Math.round(originalVolume*100)+"%",14,PRIMARY_TEXT,false);content.addView(originalLabel);
         SeekBar original=new SeekBar(this);original.setMax(200);original.setProgress(Math.round(originalVolume*100));content.addView(original);
         TextView musicLabel=text("音乐音量："+Math.round(musicVolume*100)+"%",14,PRIMARY_TEXT,false);content.addView(musicLabel);
@@ -9492,6 +9518,29 @@ public class MainActivity extends Activity {
         return file;
     }
 
+    private static String lockedFileSuffix(String name) {
+        if (name == null) return "";
+        int dot = name.lastIndexOf('.');
+        if (dot <= 0 || dot >= name.length() - 1) return "";
+        String suffix = name.substring(dot);
+        if (suffix.length() > 16 || suffix.indexOf('/') >= 0 || suffix.indexOf('\\') >= 0) {
+            return "";
+        }
+        return suffix;
+    }
+
+    private static String editableFileBase(String name) {
+        if (name == null || name.trim().isEmpty()) return "converted";
+        String suffix = lockedFileSuffix(name);
+        return suffix.isEmpty() ? name : name.substring(0, name.length() - suffix.length());
+    }
+
+    private static String sanitizeRenamedBase(String value) {
+        if (value == null) return "";
+        return value.replace('\n', ' ').replace('\r', ' ')
+                .replaceAll("[\\/:*?\"<>|]", "_").trim();
+    }
+
     private String safeBaseName(String name) {
         if (name == null || name.trim().isEmpty()) return "converted";
         int dot = name.lastIndexOf('.');
@@ -9818,18 +9867,54 @@ public class MainActivity extends Activity {
             infoParams.setMarginStart(dp(10));
             row.addView(info, infoParams);
 
+            FrameLayout nameFrame = new FrameLayout(MainActivity.this);
+            info.addView(nameFrame, matchWrap());
+
             TextView name = text("", 14, PRIMARY_TEXT, true);
             name.setSingleLine(true);
             name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-            info.addView(name, matchWrap());
+            name.setClickable(true);
+            nameFrame.addView(name, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            LinearLayout renameRow = new LinearLayout(MainActivity.this);
+            renameRow.setOrientation(LinearLayout.HORIZONTAL);
+            renameRow.setGravity(Gravity.CENTER_VERTICAL);
+            renameRow.setVisibility(View.GONE);
+            nameFrame.addView(renameRow, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            EditText renameEdit = new EditText(MainActivity.this);
+            renameEdit.setSingleLine(true);
+            renameEdit.setTextSize(14);
+            renameEdit.setTextColor(PRIMARY_TEXT);
+            renameEdit.setTypeface(null, 1);
+            renameEdit.setPadding(0, 0, 0, 0);
+            renameEdit.setBackgroundColor(Color.TRANSPARENT);
+            renameEdit.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+            renameEdit.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                    | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+            renameRow.addView(renameEdit, new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView renameSuffix = text("", 14, PRIMARY_TEXT, false);
+            renameSuffix.setSingleLine(true);
+            renameRow.addView(renameSuffix, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
             TextView detail = text("", 12, SECONDARY_TEXT, false);
             detail.setPadding(0, dp(4), 0, 0);
             info.addView(detail, matchWrap());
-            return new Holder(row, thumbnail, name, detail, remove);
+            return new Holder(row, thumbnail, name, renameRow, renameEdit, renameSuffix, detail, remove);
         }
 
         @Override public void onBindViewHolder(Holder holder, int position) {
             SelectedItem item = selectedItems.get(position);
+            holder.renaming = false;
+            holder.renameEdit.setOnFocusChangeListener(null);
+            holder.renameEdit.clearFocus();
+            holder.renameRow.setVisibility(View.GONE);
+            holder.name.setVisibility(View.VISIBLE);
             holder.name.setText((position + 1) + ". " + item.name);
             holder.detail.setText(sourceFormatLabel(item.sourceFormat)
                     + (item.size >= 0 ? " · " + humanSize(item.size) : "")
@@ -9839,6 +9924,16 @@ public class MainActivity extends Activity {
             holder.itemView.setContentDescription(item.isVideo()
                     ? "长按拖动排序；点按打开视频操作"
                     : "长按拖动排序");
+            holder.name.setOnClickListener(v -> {
+                if (locked) return;
+                beginInlineRename(holder);
+            });
+            holder.name.setOnLongClickListener(v -> {
+                if (locked) return false;
+                if (holder.renaming) commitInlineRename(holder);
+                itemTouchHelper.startDrag(holder);
+                return true;
+            });
             holder.remove.setOnClickListener(v -> {
                 if (locked) return;
                 int p = holder.getBindingAdapterPosition();
@@ -9852,6 +9947,10 @@ public class MainActivity extends Activity {
             });
             holder.itemView.setOnClickListener(v -> {
                 if (locked) return;
+                if (holder.renaming) {
+                    commitInlineRename(holder);
+                    return;
+                }
                 int p = holder.getBindingAdapterPosition();
                 if (p == RecyclerView.NO_POSITION) return;
                 SelectedItem current = selectedItems.get(p);
@@ -9861,6 +9960,7 @@ public class MainActivity extends Activity {
             });
             holder.itemView.setOnLongClickListener(v -> {
                 if (locked) return false;
+                if (holder.renaming) commitInlineRename(holder);
                 itemTouchHelper.startDrag(holder);
                 return true;
             });
@@ -9886,18 +9986,82 @@ public class MainActivity extends Activity {
             }
         }
 
+        private void beginInlineRename(Holder holder) {
+            if (holder == null || holder.renaming || locked) return;
+            int position = holder.getBindingAdapterPosition();
+            if (position == RecyclerView.NO_POSITION) return;
+            SelectedItem item = selectedItems.get(position);
+            String suffix = lockedFileSuffix(item.name);
+            String base = editableFileBase(item.name);
+            holder.renaming = true;
+            holder.renameSuffix.setText(suffix);
+            holder.renameEdit.setText(base);
+            holder.name.setVisibility(View.GONE);
+            holder.renameRow.setVisibility(View.VISIBLE);
+            holder.renameEdit.setOnFocusChangeListener((view, hasFocus) -> {
+                if (!hasFocus) commitInlineRename(holder);
+            });
+            holder.renameEdit.setOnEditorActionListener((view, actionId, event) -> {
+                boolean enter = actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                        || (event != null
+                        && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER
+                        && event.getAction() == android.view.KeyEvent.ACTION_UP);
+                if (!enter) return false;
+                commitInlineRename(holder);
+                return true;
+            });
+            holder.renameEdit.requestFocus();
+            holder.renameEdit.setSelection(0, holder.renameEdit.length());
+            android.view.inputmethod.InputMethodManager keyboard =
+                    (android.view.inputmethod.InputMethodManager) getSystemService(
+                            android.content.Context.INPUT_METHOD_SERVICE);
+            if (keyboard != null) keyboard.showSoftInput(
+                    holder.renameEdit, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+        }
+
+        private void commitInlineRename(Holder holder) {
+            if (holder == null || !holder.renaming) return;
+            int position = holder.getBindingAdapterPosition();
+            holder.renaming = false;
+            holder.renameEdit.setOnFocusChangeListener(null);
+            String suffix = String.valueOf(holder.renameSuffix.getText());
+            String base = sanitizeRenamedBase(holder.renameEdit.getText().toString());
+            if (position != RecyclerView.NO_POSITION && position < selectedItems.size()) {
+                SelectedItem item = selectedItems.get(position);
+                if (base.isEmpty()) base = editableFileBase(item.name);
+                item.name = base + suffix;
+                holder.name.setText((position + 1) + ". " + item.name);
+            }
+            holder.renameRow.setVisibility(View.GONE);
+            holder.name.setVisibility(View.VISIBLE);
+            holder.renameEdit.clearFocus();
+            android.view.inputmethod.InputMethodManager keyboard =
+                    (android.view.inputmethod.InputMethodManager) getSystemService(
+                            android.content.Context.INPUT_METHOD_SERVICE);
+            if (keyboard != null) keyboard.hideSoftInputFromWindow(
+                    holder.renameEdit.getWindowToken(), 0);
+        }
+
         @Override public int getItemCount() { return selectedItems.size(); }
 
         final class Holder extends RecyclerView.ViewHolder {
             final ImageView thumbnail;
             final TextView name;
+            final LinearLayout renameRow;
+            final EditText renameEdit;
+            final TextView renameSuffix;
             final TextView detail;
             final TextView remove;
+            boolean renaming;
             Holder(View itemView, ImageView thumbnail, TextView name,
+                   LinearLayout renameRow, EditText renameEdit, TextView renameSuffix,
                    TextView detail, TextView remove) {
                 super(itemView);
                 this.thumbnail = thumbnail;
                 this.name = name;
+                this.renameRow = renameRow;
+                this.renameEdit = renameEdit;
+                this.renameSuffix = renameSuffix;
                 this.detail = detail;
                 this.remove = remove;
             }
@@ -9975,7 +10139,7 @@ public class MainActivity extends Activity {
 
     private static final class SelectedItem {
         final Uri uri;
-        final String name;
+        String name;
         final String mime;
         final long size;
         final SourceFormat sourceFormat;
